@@ -1,0 +1,29 @@
+[
+    {
+        "name": "aws",
+        "server": "3.25.218.216",
+        "username": "root",
+        "port": "22",
+        "authentication": "SSH Key",
+        "key_file": "C:/Users/suraj/Downloads/test (1).pem",
+        "key_passphrase": ""
+    },
+    {
+        "name": "ubuntu",
+        "server": "3.25.218.216",
+        "username": "ubuntu",
+        "port": "22",
+        "authentication": "SSH Key",
+        "key_file": "C:/Users/suraj/Downloads/test (1).pem",
+        "key_passphrase": ""
+    },
+    {
+        "name": "edu",
+        "server": "eudefra11dns02.info.corp",
+        "username": "suraj_joshi",
+        "port": "22",
+        "authentication": "Password",
+        "key_file": "",
+        "key_passphrase": ""
+    }
+]
