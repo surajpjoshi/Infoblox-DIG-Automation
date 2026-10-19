@@ -517,7 +517,8 @@ def execute_ssh(
     commands,
     log_callback,
     keep_connection=False,
-    progress_callback=None
+    progress_callback=None,
+    command_callback=None
 ):
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -578,7 +579,22 @@ def execute_ssh(
         start_time = time.time()
         last_data_time = time.time()
         max_runtime = max(120, len(commands) * 15)
+        current_command_index = None
+        current_output_start = len(output)
+        current_command_started = None
+
+        def emit_command_event(event, command, status=None, started=None, ended=None):
+            if command_callback:
+                try:
+                    command_callback(event, server, command, status, started, ended)
+                except Exception:
+                    pass
+
         if commands:
+            current_command_index = 0
+            current_command_started = time.time()
+            current_output_start = len(output)
+            emit_command_event("start", commands[0], None, current_command_started, None)
             channel.send(commands[0] + "\n")
             command_index = 1
         while True:
@@ -610,11 +626,28 @@ def execute_ssh(
             cleaned = clean_terminal_text(output)
             prompt_returned = re.search(r"(?:^|\n)[^\n]*>\s*$", cleaned, flags=re.MULTILINE)
             if prompt_returned and time.time() - last_data_time > 0.5:
+                if current_command_index is not None:
+                    command_text = commands[current_command_index]
+                    command_output = output[current_output_start:]
+                    command_status = detect_actual_dns_status(command_output)
+                    command_finished_at = time.time()
+                    emit_command_event(
+                        "complete", command_text, command_status,
+                        current_command_started, command_finished_at
+                    )
+                    current_command_index = None
                 if STOP_DIG_EVENT.is_set():
                     break
                 if command_index < len(commands):
                     if progress_callback:
                         progress_callback(command_index, len(commands))
+                    current_command_index = command_index
+                    current_command_started = time.time()
+                    current_output_start = len(output)
+                    emit_command_event(
+                        "start", commands[current_command_index], None,
+                        current_command_started, None
+                    )
                     channel.send(commands[command_index] + "\n")
                     command_index += 1
                     pager_handled = False
@@ -661,7 +694,7 @@ def execute_ssh(
                 shutil.rmtree(temp_key_dir, ignore_errors=True)
 
 
-def execute_on_existing_session(channel, commands, log_callback, progress_callback=None):
+def execute_on_existing_session(channel, commands, log_callback, progress_callback=None, command_callback=None, server=""):
     if not commands:
         return ""
     global ACTIVE_SSH_CHANNEL
@@ -675,6 +708,14 @@ def execute_on_existing_session(channel, commands, log_callback, progress_callba
     start_time = time.time()
     last_data_time = time.time()
     max_runtime = max(120, len(commands) * 15)
+    current_command_index = 0
+    current_command_started = time.time()
+    current_output_start = len(output)
+    if command_callback:
+        try:
+            command_callback("start", server, commands[0], None, current_command_started, None)
+        except Exception:
+            pass
     channel.send(commands[0] + "\n")
     command_index = 1
     while True:
@@ -706,11 +747,33 @@ def execute_on_existing_session(channel, commands, log_callback, progress_callba
         cleaned = clean_terminal_text(output)
         prompt_returned = re.search(r"(?:^|\n)[^\n]*>\s*$", cleaned, flags=re.MULTILINE)
         if prompt_returned and time.time() - last_data_time > 0.5:
+            if current_command_index is not None:
+                command_status = detect_actual_dns_status(output[current_output_start:])
+                if command_callback:
+                    try:
+                        command_callback(
+                            "complete", server, commands[current_command_index], command_status,
+                            current_command_started, time.time()
+                        )
+                    except Exception:
+                        pass
+                current_command_index = None
             if STOP_DIG_EVENT.is_set():
                 break
             if command_index < len(commands):
                 if progress_callback:
                     progress_callback(command_index, len(commands))
+                current_command_index = command_index
+                current_command_started = time.time()
+                current_output_start = len(output)
+                if command_callback:
+                    try:
+                        command_callback(
+                            "start", server, commands[current_command_index], None,
+                            current_command_started, None
+                        )
+                    except Exception:
+                        pass
                 channel.send(commands[command_index] + "\n")
                 command_index += 1
                 pager_handled = False
@@ -830,7 +893,8 @@ def run_step3(
     unsuccessful_commands,
     log_callback,
     session=None,
-    progress_callback=None
+    progress_callback=None,
+    command_callback=None
 ):
     if not unsuccessful_commands:
         return ""
@@ -840,7 +904,9 @@ def run_step3(
             channel=session[1],
             commands=commands,
             log_callback=log_callback,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            command_callback=command_callback,
+            server=server
         )
     return execute_ssh(
         server=server,
@@ -852,7 +918,8 @@ def run_step3(
         key_passphrase=key_passphrase,
         commands=commands,
         log_callback=log_callback,
-        progress_callback=progress_callback
+        progress_callback=progress_callback,
+        command_callback=command_callback
     )
 
 
@@ -1219,6 +1286,25 @@ class InfobloxDigApp:
         self.terminal_profile_menu = None
         self.terminal_trailing_option_entry = None
         self.terminal_profiles = []
+
+        # Additive live DIG monitor state (does not change execution decisions).
+        self.dig_monitor_window = None
+        self.dig_monitor_tree = None
+        self.dig_monitor_summary = None
+        self.dig_monitor_progress = None
+        self.dig_monitor_started_label = None
+        self.dig_monitor_elapsed_label = None
+        self.dig_monitor_rows = []
+        self.dig_monitor_lock = threading.RLock()
+        self.dig_monitor_started_at = None
+        self.dig_monitor_finished_at = None
+        self.dig_monitor_timer_running = False
+        # Additive monitor controls: search/filter, failed-query view, ETA estimate.
+        self.dig_monitor_search_var = None
+        self.dig_monitor_status_var = None
+        self.dig_monitor_eta_label = None
+        self.dig_monitor_failed_window = None
+        self.dig_monitor_failed_tree = None
 
         self._status_pills = {}
 
@@ -3383,6 +3469,490 @@ class InfobloxDigApp:
         self.terminal_disconnect_button = None
 
     # ========================================================
+    # LIVE DIG EXECUTION MONITOR (ADDITIVE UI ONLY)
+    # ========================================================
+    @staticmethod
+    def _monitor_domain_from_command(command):
+        parts = (command or "").strip().split()
+        if parts and parts[0].lower() == "dig":
+            parts = parts[1:]
+        for index, token in enumerate(parts):
+            if token.startswith("@") or token.startswith("+") or token.startswith("-"):
+                if token == "-x" and index + 1 < len(parts):
+                    return parts[index + 1]
+                continue
+            return token
+        return (command or "").strip()
+
+    def _monitor_begin(self, server_commands, title="Live DIG Execution Monitor"):
+        """Initialize a live status table for the current run."""
+        now = time.time()
+        with self.dig_monitor_lock:
+            self.dig_monitor_started_at = now
+            self.dig_monitor_finished_at = None
+            self.dig_monitor_rows = []
+            for index, (server, command) in enumerate(server_commands):
+                self.dig_monitor_rows.append({
+                    "id": str(index),
+                    "server": str(server or ""),
+                    "command": normalize_command(command),
+                    "domain": self._monitor_domain_from_command(command),
+                    "status": "PENDING",
+                    "start": "",
+                    "end": "",
+                    "duration": "",
+                    "started_ts": None,
+                    "ended_ts": None,
+                })
+        self.root.after(0, lambda t=title: self._monitor_build_window(t))
+        self.root.after(0, self._monitor_refresh)
+        self._monitor_schedule_timer()
+
+    def _monitor_build_window(self, title):
+        try:
+            if self.dig_monitor_window is not None and self.dig_monitor_window.winfo_exists():
+                self.dig_monitor_window.destroy()
+        except Exception:
+            pass
+        try:
+            win = ctk.CTkToplevel(self.root)
+            self.dig_monitor_window = win
+            win.title(title)
+            win.geometry("1380x760")
+            win.minsize(960, 520)
+            win.configure(fg_color=COLOR_BG)
+            win.grid_columnconfigure(0, weight=1)
+            win.grid_rowconfigure(3, weight=1)
+
+            header = ctk.CTkFrame(win, fg_color=COLOR_SURFACE, corner_radius=14,
+                                  border_width=1, border_color=COLOR_BORDER)
+            header.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
+            header.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(header, text="LIVE DIG EXECUTION",
+                         font=font(15, "bold"), text_color=COLOR_TEXT).grid(
+                row=0, column=0, sticky="w", padx=16, pady=(12, 4))
+            self.dig_monitor_summary = ctk.CTkLabel(
+                header, text="Preparing commands...", font=font(10, "bold"),
+                text_color=COLOR_TEXT_MUTED, anchor="w")
+            self.dig_monitor_summary.grid(row=1, column=0, sticky="ew", padx=16, pady=2)
+
+            meta = ctk.CTkFrame(header, fg_color="transparent")
+            meta.grid(row=2, column=0, sticky="ew", padx=16, pady=(4, 12))
+            self.dig_monitor_started_label = ctk.CTkLabel(
+                meta, text="Start: —", font=font(10), text_color=COLOR_TEXT_MUTED)
+            self.dig_monitor_started_label.pack(side="left", padx=(0, 18))
+            self.dig_monitor_elapsed_label = ctk.CTkLabel(
+                meta, text="Elapsed: 00:00:00", font=font(10, "bold"), text_color=COLOR_TEXT)
+            self.dig_monitor_elapsed_label.pack(side="left", padx=(0, 18))
+            self.dig_monitor_eta_label = ctk.CTkLabel(
+                meta, text="Estimated remaining: calculating…", font=font(10, "bold"),
+                text_color=COLOR_WARNING)
+            self.dig_monitor_eta_label.pack(side="left", padx=(0, 18))
+            ctk.CTkButton(
+                meta, text="Stop DIG", width=100, height=30,
+                fg_color=COLOR_DANGER, hover_color=COLOR_DANGER_HOVER,
+                command=self._monitor_stop_dig
+            ).pack(side="right", padx=(8, 0))
+            ctk.CTkButton(
+                meta, text="Failed Queries", width=120, height=30,
+                fg_color=COLOR_WARNING, hover_color=COLOR_DANGER_HOVER,
+                command=self._monitor_open_failed_view
+            ).pack(side="right", padx=(8, 0))
+            ctk.CTkButton(
+                meta, text="Export Live CSV", width=120, height=30,
+                fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+                command=self._monitor_export_csv
+            ).pack(side="right")
+
+            progress_frame = ctk.CTkFrame(win, fg_color="transparent")
+            progress_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+            self.dig_monitor_progress = ctk.CTkProgressBar(
+                progress_frame, height=12, corner_radius=6,
+                fg_color=COLOR_SURFACE_ALT, progress_color=COLOR_SUCCESS)
+            self.dig_monitor_progress.set(0)
+            self.dig_monitor_progress.pack(fill="x", expand=True)
+
+            filters = ctk.CTkFrame(win, fg_color=COLOR_SURFACE, corner_radius=10,
+                                   border_width=1, border_color=COLOR_BORDER)
+            filters.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 8))
+            filters.grid_columnconfigure(0, weight=1)
+            self.dig_monitor_search_var = tk.StringVar(value="")
+            self.dig_monitor_status_var = tk.StringVar(value="All statuses")
+            ctk.CTkLabel(filters, text="Search server / domain / command:",
+                         font=font(10), text_color=COLOR_TEXT_MUTED).pack(
+                side="left", padx=(12, 6), pady=8)
+            search_entry = ctk.CTkEntry(
+                filters, textvariable=self.dig_monitor_search_var, width=300,
+                placeholder_text="Type to filter results…")
+            search_entry.pack(side="left", padx=(0, 14), pady=8)
+            ctk.CTkLabel(filters, text="Status:", font=font(10),
+                         text_color=COLOR_TEXT_MUTED).pack(side="left", padx=(0, 6))
+            status_menu = ctk.CTkOptionMenu(
+                filters, variable=self.dig_monitor_status_var, width=190,
+                values=["All statuses", "SERVFAIL", "NXDOMAIN", "Timeouts",
+                        "IN PROGRESS", "Pending", "Failed"],
+                command=lambda _value: self._monitor_apply_filters())
+            status_menu.pack(side="left", padx=(0, 10), pady=8)
+            self.dig_monitor_search_var.trace_add("write", lambda *_args: self._monitor_apply_filters())
+            ctk.CTkButton(
+                filters, text="Clear Filters", width=100, height=30,
+                fg_color=COLOR_SURFACE_ALT, hover_color=COLOR_SURFACE_HOVER,
+                command=self._monitor_clear_filters
+            ).pack(side="left", padx=(0, 10), pady=8)
+
+            table_frame = ctk.CTkFrame(win, fg_color=COLOR_SURFACE, corner_radius=12,
+                                       border_width=1, border_color=COLOR_BORDER)
+            table_frame.grid(row=3, column=0, sticky="nsew", padx=14, pady=(0, 14))
+            table_frame.grid_columnconfigure(0, weight=1)
+            table_frame.grid_rowconfigure(0, weight=1)
+            columns = ("server", "domain", "status", "start", "end", "duration", "command")
+            tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=18)
+            self.dig_monitor_tree = tree
+            labels = {"server": "Server", "domain": "Domain / Query", "status": "Status",
+                      "start": "Start Time", "end": "End Time", "duration": "Duration",
+                      "command": "DIG Command"}
+            widths = {"server": 160, "domain": 180, "status": 150, "start": 145,
+                      "end": 145, "duration": 95, "command": 420}
+            for col in columns:
+                tree.heading(col, text=labels[col])
+                tree.column(col, width=widths[col], minwidth=80,
+                            anchor="w" if col in ("server", "domain", "command") else "center")
+            style = ttk.Style()
+            try:
+                style.theme_use("clam")
+            except Exception:
+                pass
+            style.configure("DigMonitor.Treeview", background=COLOR_SURFACE_ALT,
+                            foreground=COLOR_TEXT, fieldbackground=COLOR_SURFACE_ALT,
+                            rowheight=28, font=(FONT_FAMILY, 9), borderwidth=0)
+            style.configure("DigMonitor.Treeview.Heading", background=COLOR_BORDER,
+                            foreground=COLOR_TEXT, font=(FONT_FAMILY, 9, "bold"), relief="flat")
+            tree.configure(style="DigMonitor.Treeview")
+            tree.tag_configure("success", foreground="#22c55e")
+            tree.tag_configure("running", foreground="#f59e0b")
+            tree.tag_configure("failed", foreground="#ef4444")
+            tree.tag_configure("pending", foreground=COLOR_TEXT_MUTED)
+            yscroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
+            xscroll = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
+            tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+            tree.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=(8, 0))
+            yscroll.grid(row=0, column=1, sticky="ns", pady=(8, 0), padx=(0, 8))
+            xscroll.grid(row=1, column=0, sticky="ew", padx=(8, 0), pady=(0, 8))
+            with self.dig_monitor_lock:
+                rows = list(self.dig_monitor_rows)
+            for row in rows:
+                tree.insert("", "end", iid=row["id"], values=(
+                    row["server"], row["domain"], row["status"], row["start"],
+                    row["end"], row["duration"], row["command"]
+                ), tags=("pending",))
+            win.protocol("WM_DELETE_WINDOW", win.withdraw)
+            self._monitor_refresh()
+        except Exception as exc:
+            self.log(f"[MONITOR] Unable to open live DIG monitor: {exc}")
+
+    def _monitor_stop_dig(self):
+        """Stop the active run using the existing cancellation pathway."""
+        if self.dig_monitor_finished_at is not None or STOP_DIG_EVENT.is_set():
+            return
+        if messagebox.askyesno("Stop DIG", "Stop the current DIG run and close active SSH channels?",
+                               parent=self.dig_monitor_window):
+            self.stop_dig()
+
+    def _monitor_clear_filters(self):
+        if self.dig_monitor_search_var is not None:
+            self.dig_monitor_search_var.set("")
+        if self.dig_monitor_status_var is not None:
+            self.dig_monitor_status_var.set("All statuses")
+        self._monitor_apply_filters()
+
+    def _monitor_apply_filters(self):
+        try:
+            if self.dig_monitor_tree is None or not self.dig_monitor_tree.winfo_exists():
+                return
+            query = (self.dig_monitor_search_var.get() if self.dig_monitor_search_var else "").strip().lower()
+            status_filter = self.dig_monitor_status_var.get() if self.dig_monitor_status_var else "All statuses"
+            with self.dig_monitor_lock:
+                rows = [row.copy() for row in self.dig_monitor_rows]
+            for row in rows:
+                status = row["status"].upper()
+                searchable = " ".join((row["server"], row["domain"], row["command"], status)).lower()
+                matches_query = not query or query in searchable
+                if status_filter == "All statuses":
+                    matches_status = True
+                elif status_filter == "Timeouts":
+                    matches_status = "TIMEOUT" in status or "TIMED OUT" in status
+                elif status_filter == "Pending":
+                    matches_status = status in ("PENDING", "NO RESULT")
+                elif status_filter == "Failed":
+                    matches_status = status not in ("NOERROR", "IN PROGRESS", "PENDING", "NO RESULT", "STOPPED")
+                else:
+                    matches_status = status == status_filter.upper()
+                visible = matches_query and matches_status
+                exists = self.dig_monitor_tree.exists(row["id"])
+                if visible and not exists:
+                    self.dig_monitor_tree.insert("", "end", iid=row["id"], values=(
+                        row["server"], row["domain"], row["status"], row["start"],
+                        row["end"], row["duration"], row["command"]),
+                        tags=(self._monitor_status_tag(status),))
+                elif visible:
+                    self.dig_monitor_tree.item(row["id"], values=(
+                        row["server"], row["domain"], row["status"], row["start"],
+                        row["end"], row["duration"], row["command"]),
+                        tags=(self._monitor_status_tag(status),))
+                elif exists:
+                    self.dig_monitor_tree.delete(row["id"])
+        except Exception:
+            pass
+
+    @staticmethod
+    def _monitor_status_tag(status):
+        if status == "IN PROGRESS":
+            return "running"
+        if status in ("NOERROR", "NXDOMAIN"):
+            return "success"
+        if status in ("PENDING", "NO RESULT", "STOPPED"):
+            return "pending"
+        return "failed"
+
+    def _monitor_open_failed_view(self):
+        try:
+            if self.dig_monitor_failed_window is not None and self.dig_monitor_failed_window.winfo_exists():
+                self.dig_monitor_failed_window.deiconify()
+                self.dig_monitor_failed_window.lift()
+                self._monitor_refresh_failed_view()
+                return
+            win = ctk.CTkToplevel(self.dig_monitor_window or self.root)
+            self.dig_monitor_failed_window = win
+            win.title("Failed DIG Queries — Troubleshooting")
+            win.geometry("1050x480")
+            win.minsize(760, 350)
+            win.configure(fg_color=COLOR_BG)
+            win.grid_columnconfigure(0, weight=1)
+            win.grid_rowconfigure(0, weight=1)
+            columns = ("server", "domain", "status", "command")
+            tree = ttk.Treeview(win, columns=columns, show="headings", selectmode="browse")
+            self.dig_monitor_failed_tree = tree
+            for col, label, width in (("server", "Server", 160), ("domain", "Domain / Query", 220),
+                                      ("status", "Status", 160), ("command", "DIG Command", 470)):
+                tree.heading(col, text=label)
+                tree.column(col, width=width, minwidth=90, anchor="w")
+            tree.grid(row=0, column=0, sticky="nsew", padx=(12, 0), pady=12)
+            scroll = ttk.Scrollbar(win, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=scroll.set)
+            scroll.grid(row=0, column=1, sticky="ns", padx=(0, 12), pady=12)
+            actions = ctk.CTkFrame(win, fg_color="transparent")
+            actions.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+            ctk.CTkButton(actions, text="Copy Selected Command", command=self._monitor_copy_failed_command,
+                          fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER).pack(side="left")
+            ctk.CTkButton(actions, text="Refresh", command=self._monitor_refresh_failed_view,
+                          fg_color=COLOR_SURFACE_ALT, hover_color=COLOR_SURFACE_HOVER).pack(side="left", padx=8)
+            ctk.CTkButton(actions, text="Close", command=win.withdraw,
+                          fg_color=COLOR_SURFACE_ALT, hover_color=COLOR_SURFACE_HOVER).pack(side="right")
+            win.protocol("WM_DELETE_WINDOW", win.withdraw)
+            self._monitor_refresh_failed_view()
+        except Exception as exc:
+            self.log(f"[MONITOR] Unable to open failed-query view: {exc}")
+
+    def _monitor_refresh_failed_view(self):
+        try:
+            tree = self.dig_monitor_failed_tree
+            if tree is None or not tree.winfo_exists():
+                return
+            tree.delete(*tree.get_children())
+            with self.dig_monitor_lock:
+                rows = [row.copy() for row in self.dig_monitor_rows]
+            for row in rows:
+                status = row["status"].upper()
+                if status in ("NOERROR", "IN PROGRESS", "PENDING", "NO RESULT", "STOPPED"):
+                    continue
+                tree.insert("", "end", values=(row["server"], row["domain"], status, row["command"]))
+        except Exception:
+            pass
+
+    def _monitor_copy_failed_command(self):
+        try:
+            tree = self.dig_monitor_failed_tree
+            selected = tree.selection() if tree is not None else ()
+            if not selected:
+                messagebox.showinfo("Copy command", "Select a failed query first.",
+                                    parent=self.dig_monitor_failed_window)
+                return
+            values = tree.item(selected[0], "values")
+            command = str(values[3]) if len(values) > 3 else ""
+            if command:
+                self.dig_monitor_failed_window.clipboard_clear()
+                self.dig_monitor_failed_window.clipboard_append(command)
+                self.dig_monitor_failed_window.update_idletasks()
+                messagebox.showinfo("Copied", "DIG command copied to clipboard.",
+                                    parent=self.dig_monitor_failed_window)
+        except Exception as exc:
+            messagebox.showerror("Copy failed", str(exc), parent=self.dig_monitor_failed_window)
+
+    @staticmethod
+    def _monitor_format_duration(seconds):
+        seconds = max(0, int(seconds or 0))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    def _monitor_command_event(self, event, server, command, status=None, started=None, ended=None):
+        """Thread-safe callback from SSH execution; updates monitor only."""
+        target = normalize_command(command)
+        row_to_update = None
+        with self.dig_monitor_lock:
+            matches = [
+                row for row in self.dig_monitor_rows
+                if row["server"].lower() == str(server or "").lower()
+                and command_key(row["command"]) == command_key(target)
+            ]
+            if event == "start":
+                row_to_update = next((row for row in matches if row["status"] == "PENDING"), None)
+                if row_to_update is None:
+                    row_to_update = next((row for row in matches if row["status"] != "IN PROGRESS"), None)
+                if row_to_update is not None:
+                    row_to_update["status"] = "IN PROGRESS"
+                    row_to_update["started_ts"] = started or time.time()
+                    row_to_update["start"] = datetime.datetime.fromtimestamp(
+                        row_to_update["started_ts"]).strftime("%H:%M:%S")
+                    row_to_update["end"] = ""
+                    row_to_update["ended_ts"] = None
+                    row_to_update["duration"] = "Running..."
+            elif event == "complete":
+                row_to_update = next((row for row in matches if row["status"] == "IN PROGRESS"), None)
+                if row_to_update is None:
+                    row_to_update = next((row for row in matches if row["status"] == "PENDING"), None)
+                if row_to_update is not None:
+                    row_to_update["status"] = str(status or "NO RESULT").upper()
+                    row_to_update["ended_ts"] = ended or time.time()
+                    row_to_update["end"] = datetime.datetime.fromtimestamp(
+                        row_to_update["ended_ts"]).strftime("%H:%M:%S")
+                    if row_to_update["started_ts"] is None:
+                        row_to_update["started_ts"] = started or row_to_update["ended_ts"]
+                        row_to_update["start"] = datetime.datetime.fromtimestamp(
+                            row_to_update["started_ts"]).strftime("%H:%M:%S")
+                    row_to_update["duration"] = self._monitor_format_duration(
+                        row_to_update["ended_ts"] - row_to_update["started_ts"])
+        if row_to_update is not None:
+            self.root.after(0, lambda rid=row_to_update["id"]: self._monitor_refresh_row(rid))
+            self.root.after(0, self._monitor_refresh)
+
+    def _monitor_refresh_row(self, row_id):
+        try:
+            if self.dig_monitor_tree is None or not self.dig_monitor_tree.winfo_exists():
+                return
+            with self.dig_monitor_lock:
+                row = next((item.copy() for item in self.dig_monitor_rows if item["id"] == row_id), None)
+            if not row:
+                return
+            status = row["status"]
+            tag = self._monitor_status_tag(status)
+            values = (row["server"], row["domain"], status, row["start"], row["end"],
+                      row["duration"], row["command"])
+            if self.dig_monitor_tree.exists(row_id):
+                self.dig_monitor_tree.item(row_id, values=values, tags=(tag,))
+        except Exception:
+            pass
+
+    def _monitor_refresh(self):
+        try:
+            with self.dig_monitor_lock:
+                rows = [row.copy() for row in self.dig_monitor_rows]
+                started_at = self.dig_monitor_started_at
+                finished_at = self.dig_monitor_finished_at
+            total = len(rows)
+            running = sum(1 for row in rows if row["status"] == "IN PROGRESS")
+            pending = sum(1 for row in rows if row["status"] == "PENDING")
+            completed = sum(1 for row in rows if row["status"] not in ("IN PROGRESS", "PENDING"))
+            if self.dig_monitor_summary is not None and self.dig_monitor_summary.winfo_exists():
+                self.dig_monitor_summary.configure(
+                    text=f"Total DIGs: {total}   •   Live running: {running}   •   Completed: {completed}   •   Pending: {pending}"
+                )
+            if self.dig_monitor_progress is not None and self.dig_monitor_progress.winfo_exists():
+                self.dig_monitor_progress.set((completed / total) if total else 0)
+            if self.dig_monitor_started_label is not None and self.dig_monitor_started_label.winfo_exists():
+                start_text = datetime.datetime.fromtimestamp(started_at).strftime("%Y-%m-%d %H:%M:%S") if started_at else "—"
+                self.dig_monitor_started_label.configure(text=f"Start: {start_text}")
+            end_at = finished_at or time.time()
+            elapsed = end_at - started_at if started_at else 0
+            if self.dig_monitor_elapsed_label is not None and self.dig_monitor_elapsed_label.winfo_exists():
+                suffix = "  •  Finished" if finished_at else ""
+                self.dig_monitor_elapsed_label.configure(
+                    text=f"Total time: {self._monitor_format_duration(elapsed)}{suffix}")
+            # ETA is based on observed completion throughput; retries/SSH delays can change it.
+            done_rows = [row for row in rows if row["status"] not in ("IN PROGRESS", "PENDING", "NO RESULT")]
+            remaining = sum(1 for row in rows if row["status"] in ("IN PROGRESS", "PENDING"))
+            if self.dig_monitor_eta_label is not None and self.dig_monitor_eta_label.winfo_exists():
+                if finished_at or remaining == 0:
+                    eta_text = "Estimated remaining: 00:00:00"
+                elif len(done_rows) > 0 and elapsed > 0:
+                    seconds_left = (elapsed / len(done_rows)) * remaining
+                    eta_text = f"Estimated remaining: ~{self._monitor_format_duration(seconds_left)} (estimate)"
+                else:
+                    eta_text = "Estimated remaining: calculating…"
+                self.dig_monitor_eta_label.configure(text=eta_text)
+            self._monitor_apply_filters()
+            self._monitor_refresh_failed_view()
+        except Exception:
+            pass
+
+    def _monitor_schedule_timer(self):
+        self.dig_monitor_timer_running = True
+        def tick():
+            if not self.dig_monitor_timer_running:
+                return
+            self._monitor_refresh()
+            with self.dig_monitor_lock:
+                active = self.dig_monitor_finished_at is None
+            if active:
+                try:
+                    self.root.after(500, tick)
+                except Exception:
+                    pass
+        try:
+            self.root.after(500, tick)
+        except Exception:
+            pass
+
+    def _monitor_finish(self):
+        finished = time.time()
+        with self.dig_monitor_lock:
+            self.dig_monitor_finished_at = finished
+            final_status = "STOPPED" if STOP_DIG_EVENT.is_set() else "NO RESULT"
+            for row in self.dig_monitor_rows:
+                if row["status"] in ("PENDING", "IN PROGRESS"):
+                    row["status"] = final_status
+                    row["ended_ts"] = finished
+                    row["end"] = datetime.datetime.fromtimestamp(finished).strftime("%H:%M:%S")
+                    if row["started_ts"] is not None:
+                        row["duration"] = self._monitor_format_duration(finished - row["started_ts"])
+                    else:
+                        row["duration"] = "—"
+        self.dig_monitor_timer_running = False
+        self.root.after(0, self._monitor_refresh)
+
+    def _monitor_export_csv(self):
+        try:
+            from tkinter import filedialog
+            path = filedialog.asksaveasfilename(
+                parent=self.dig_monitor_window, title="Export live DIG results",
+                defaultextension=".csv", filetypes=[("CSV files", "*.csv")],
+                initialfile="infoblox_live_dig_results.csv")
+            if not path:
+                return
+            with self.dig_monitor_lock:
+                rows = [row.copy() for row in self.dig_monitor_rows]
+            with open(path, "w", newline="", encoding="utf-8-sig") as file:
+                writer = csv.writer(file)
+                writer.writerow(["Server", "Domain / Query", "Status", "Start Time", "End Time", "Duration", "DIG Command"])
+                for row in rows:
+                    writer.writerow([row["server"], row["domain"], row["status"], row["start"],
+                                     row["end"], row["duration"], row["command"]])
+            messagebox.showinfo("Export complete", f"Live DIG results exported to:\n{path}",
+                                parent=self.dig_monitor_window)
+        except Exception as exc:
+            messagebox.showerror("Export failed", str(exc), parent=self.root)
+
+    # ========================================================
     # LIVE OUTPUT WINDOW
     # ========================================================
     def open_live_output(self):
@@ -3583,6 +4153,8 @@ class InfobloxDigApp:
             if not commands:
                 raise Exception("No DIG commands found in the selected input.")
 
+            self._monitor_begin([(server, command) for command in commands])
+
             if getattr(self, "fast_mode_var", None) is not None and self.fast_mode_var.get():
                 try:
                     worker_count = int(self.fast_workers_entry.get().strip())
@@ -3622,7 +4194,8 @@ class InfobloxDigApp:
                 keep_connection=True,
                 progress_callback=lambda completed, total: self.root.after(
                     0, lambda c=completed, t=total: self.update_step_progress(1, c, t)
-                )
+                ),
+                command_callback=self._monitor_command_event
             )
 
             step1_output, session_client, session_channel, session_key_dir = step1_result
@@ -3648,7 +4221,8 @@ class InfobloxDigApp:
                     log_callback=self.log, session=session,
                     progress_callback=lambda completed, total: self.root.after(
                         0, lambda c=completed, t=total: self.update_step_progress(3, c, t)
-                    )
+                    ),
+                    command_callback=self._monitor_command_event
                 )
             else:
                 step3_output = ""
@@ -3714,6 +4288,7 @@ class InfobloxDigApp:
             with ACTIVE_SSH_CHANNEL_LOCK:
                 ACTIVE_SSH_CHANNEL = None
 
+            self.root.after(0, self._monitor_finish)
             self.root.after(0, lambda: self.run_button.configure(state="normal"))
             self.root.after(0, lambda: self.stop_dig_button.configure(state="disabled"))
 
@@ -3816,7 +4391,8 @@ class InfobloxDigApp:
                             f"{worker_label} {message}" if not raw else message, raw=raw
                         ),
                         keep_connection=True,
-                        progress_callback=progress_callback_for(index, 1, len(chunk))
+                        progress_callback=progress_callback_for(index, 1, len(chunk)),
+                        command_callback=self._monitor_command_event
                     )
                     if isinstance(step1_result, tuple) and len(step1_result) == 4:
                         break
@@ -3834,6 +4410,11 @@ class InfobloxDigApp:
 
                 if not isinstance(step1_result, tuple) or len(step1_result) != 4:
                     self.log(f"{worker_label} SSH connection failed after {max_connect_attempts} attempts; marking assigned commands as timed out.")
+                    for failed_command in chunk:
+                        self._monitor_command_event(
+                            "complete", server, failed_command, "CONNECTION TIMED OUT",
+                            time.time(), time.time()
+                        )
                     return index, timeout_output(chunk), [], "", True
 
                 step1_output, client, channel, key_dir = step1_result
@@ -3855,7 +4436,8 @@ class InfobloxDigApp:
                                 f"{worker_label} {message}" if not raw else message, raw=raw
                             ),
                             session=session,
-                            progress_callback=progress_callback_for(index, 3, len(unsuccessful))
+                            progress_callback=progress_callback_for(index, 3, len(unsuccessful)),
+                            command_callback=self._monitor_command_event
                         )
                 return index, step1_output, unsuccessful, step3_output, False
             except Exception as exc:
@@ -4254,6 +4836,12 @@ class InfobloxDigApp:
             OUTPUT_DIR = os.path.abspath(selected_output)
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+        self._monitor_begin(
+            [(profile.get("server", "") or profile.get("name", ""), command)
+             for profile in profiles for command in commands],
+            title="Multi-Infoblox Live DIG Monitor"
+        )
+
         self.run_button.configure(state="disabled")
         self.profiles_button.configure(state="disabled")
 
@@ -4573,11 +5161,16 @@ class InfobloxDigApp:
                         server_log_callback(idx, message, raw=raw)
                     ),
                     keep_connection=True,
-                    progress_callback=step1_progress
+                    progress_callback=step1_progress,
+                    command_callback=self._monitor_command_event
                 )
 
                 if not step1:
                     for command in commands:
+                        self._monitor_command_event(
+                            "complete", server, command, "CONNECTION TIMED OUT",
+                            time.time(), time.time()
+                        )
                         store_comparison(server, command, "CONNECTION TIMED OUT")
                     update_dashboard_progress(server_index, len(commands), len(commands), "Step 1")
                     update_dashboard_status(
@@ -4633,7 +5226,8 @@ class InfobloxDigApp:
                             server_log_callback(idx, message, raw=raw)
                         ),
                         session=session,
-                        progress_callback=step3_progress
+                        progress_callback=step3_progress,
+                        command_callback=self._monitor_command_event
                     )
 
                 make_server_reports(
@@ -4797,6 +5391,7 @@ class InfobloxDigApp:
             for thread in threads:
                 thread.join()
 
+            self.root.after(0, self._monitor_finish)
             self.root.after(0, create_command_comparison)
             self.root.after(0, lambda: self.run_button.configure(state="normal"))
             self.root.after(0, lambda: self.profiles_button.configure(state="normal"))
