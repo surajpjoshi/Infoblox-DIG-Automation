@@ -2143,6 +2143,8 @@ class InfobloxDigApp:
         self._pages["fqdn"] = page
 
         self.fqdn_server_var = ctk.StringVar(value="Current Connection")
+        # Additive FQDN matching mode; Exact Match preserves the original search behavior.
+        self.fqdn_match_mode_var = ctk.StringVar(value="Exact Match")
         self.fqdn_server_profiles = []
         self.fqdn_results_df = pd.DataFrame()
         self.fqdn_current_fqdn = ""
@@ -2165,7 +2167,7 @@ class InfobloxDigApp:
             font=font(16, "bold"),
             text_color=COLOR_TEXT,
             anchor="w"
-        ).grid(row=0, column=0, columnspan=3, padx=20, pady=(16, 2), sticky="w")
+        ).grid(row=0, column=0, columnspan=4, padx=20, pady=(16, 2), sticky="w")
 
         ctk.CTkLabel(
             header,
@@ -2173,7 +2175,7 @@ class InfobloxDigApp:
             font=font(10),
             text_color=COLOR_TEXT_MUTED,
             anchor="w"
-        ).grid(row=1, column=0, columnspan=3, padx=20, pady=(0, 14), sticky="w")
+        ).grid(row=1, column=0, columnspan=4, padx=20, pady=(0, 14), sticky="w")
 
         ctk.CTkLabel(
             header, text="CSV Folder", font=font(10), text_color=COLOR_TEXT_MUTED
@@ -2193,12 +2195,27 @@ class InfobloxDigApp:
         self.fqdn_search_entry = self._entry(header)
         self.fqdn_search_entry.grid(row=3, column=1, padx=(0, 10), pady=(4, 12), sticky="ew")
         self.fqdn_search_entry.bind("<Return>", lambda event: self.fqdn_search())
+        self.fqdn_match_mode_menu = ctk.CTkOptionMenu(
+            header,
+            variable=self.fqdn_match_mode_var,
+            values=["Exact Match", "Starts With", "Ends With"],
+            width=145,
+            height=38,
+            corner_radius=10,
+            fg_color=COLOR_SURFACE_ALT,
+            button_color=COLOR_ACCENT,
+            button_hover_color=COLOR_ACCENT_HOVER,
+            dropdown_fg_color=COLOR_SURFACE_ALT,
+            dropdown_hover_color=COLOR_ACCENT,
+            font=font(10),
+        )
+        self.fqdn_match_mode_menu.grid(row=3, column=2, padx=(0, 10), pady=(4, 12))
         ctk.CTkButton(
             header, text="⌕  SEARCH", width=120, height=38, corner_radius=10,
             fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
             text_color="#ffffff", font=font(10, "bold"),
             command=self.fqdn_search
-        ).grid(row=3, column=2, padx=(0, 20), pady=(4, 12))
+        ).grid(row=3, column=3, padx=(0, 20), pady=(4, 12))
 
         ctk.CTkLabel(
             header, text="DIG Server", font=font(10), text_color=COLOR_TEXT_MUTED
@@ -2756,7 +2773,16 @@ class InfobloxDigApp:
                     df = pd.read_csv(file_path, dtype=str, low_memory=False)
                     if len(df.columns) < 2:
                         continue
-                    filtered = df[df.iloc[:, 1] == fqdn]
+                    # Keep the original exact-match behavior as the default.
+                    # Starts/Ends With only change the FQDN matching criterion.
+                    match_mode = self.fqdn_match_mode_var.get()
+                    fqdn_column = df.iloc[:, 1].fillna("").astype(str)
+                    if match_mode == "Starts With":
+                        filtered = df[fqdn_column.str.startswith(fqdn, na=False)]
+                    elif match_mode == "Ends With":
+                        filtered = df[fqdn_column.str.endswith(fqdn, na=False)]
+                    else:
+                        filtered = df[df.iloc[:, 1] == fqdn]
                     if not filtered.empty:
                         selected = filtered.iloc[:, required_columns]
                         selected["Source_File"] = file
