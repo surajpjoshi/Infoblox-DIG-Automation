@@ -7278,9 +7278,3 @@ if __name__ == "__main__":
             error_root.destroy()
         except Exception:
             print(error_text)
-
-
-
-
-
-
