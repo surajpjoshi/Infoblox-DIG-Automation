@@ -2724,8 +2724,6 @@ class InfobloxDigApp:
         self.fqdn_visible_columns = []
         self.fqdn_visible_rows = []
         self.fqdn_table = None
-        # Additive display-only storage for the first three source-file header rows.
-        self.fqdn_header_rows_by_file = {}
 
 
 
@@ -3418,67 +3416,13 @@ class InfobloxDigApp:
         self.fqdn_table.heading("__dig__", text="ACTION")
         self.fqdn_table.column("__dig__", width=110, minwidth=110, anchor="center", stretch=False)
 
-        # Additive display-only styling: source header rows are visually distinct
-        # from matching FQDN records and are never DIG-action rows.
-        try:
-            # Use a high-contrast tag so header rows remain clearly distinct
-            # even when the surrounding Treeview uses a dark theme.
-            self.fqdn_table.tag_configure(
-                "fqdn_source_header",
-                background="#FDE68A",
-                foreground="#111827",
-                font=("Segoe UI", 9, "bold")
-            )
-        except Exception:
-            pass
 
-        displayed_header_files = set()
+
+
         for dataframe_index in self.fqdn_visible_rows:
             if dataframe_index >= len(self.fqdn_results_df.index):
                 continue
             row = self.fqdn_results_df.iloc[dataframe_index]
-            source_file = str(row.get("Source_File", ""))
-
-            # Show each matching CSV's first three source rows before its first result.
-            # These are display-only rows and cannot trigger the DIG action.
-            if source_file and source_file not in displayed_header_files:
-                displayed_header_files.add(source_file)
-                raw_header_rows = getattr(self, "fqdn_header_rows_by_file", {}).get(source_file, [])
-                # The native Treeview heading displays source header row 1
-                # (header-authzone, fqdn*, zone_format*, ...). Some source files
-                # repeat that same row as the first data row. Skip any repeated
-                # copy, then display header-forwardzone and header-delegatedzone
-                # as the two additional, styled header bands before matching data.
-                base_header = [str(value).strip() if value is not None else "" for value in columns]
-                additional_headers = []
-                for raw_header in raw_header_rows:
-                    normalized_header = [str(value).strip() if value is not None else "" for value in raw_header]
-                    if normalized_header == base_header:
-                        continue
-                    # Only keep the two remaining header-type rows requested.
-                    if any(value.startswith("header-") for value in normalized_header):
-                        additional_headers.append(raw_header)
-                    if len(additional_headers) >= 2:
-                        break
-
-                for header_index, raw_header in enumerate(additional_headers, start=2):
-                    header_values = [
-                        str(raw_header[col_index]) if col_index < len(raw_header) and raw_header[col_index] is not None else ""
-                        for col_index in [0, 1, 2, 3, 4, 6, 8, 9, 10, 27, 30, 37, 39, 40]
-                    ]
-                    # Match the result table's selected columns; keep Source_File visible
-                    # when it is among the displayed columns.
-                    if "Source_File" in columns:
-                        header_values.append(source_file)
-                    while len(header_values) < len(columns):
-                        header_values.append("")
-                    header_values = header_values[:len(columns)]
-                    self.fqdn_table.insert(
-                        "", "end", iid=f"header_{re.sub(r'[^A-Za-z0-9_]', '_', source_file)}_{header_index}",
-                        values=header_values + [f"HEADER {header_index}"],
-                        tags=("fqdn_source_header",)
-                    )
-
             values = ["" if pd.isna(row[column]) else str(row[column]) for column in columns]
             all_row_values = ["" if pd.isna(value) else str(value) for value in row.tolist()]
             ips = self.fqdn_extract_ips(all_row_values)
@@ -3501,7 +3445,7 @@ class InfobloxDigApp:
             return
         column_id = self.fqdn_table.identify_column(event.x)
         row_id = self.fqdn_table.identify_row(event.y)
-        if not row_id or not row_id.startswith("row_") or column_id != f"#{len(self.fqdn_visible_columns) + 1}":
+        if not row_id or column_id != f"#{len(self.fqdn_visible_columns) + 1}":
             return
         try:
             dataframe_index = int(row_id.replace("row_", ""))
@@ -3606,16 +3550,6 @@ class InfobloxDigApp:
             if file.endswith(".csv"):
                 file_path = os.path.join(folder_path, file)
                 try:
-                    # Additive display support: preserve the first three physical rows
-                    # from each CSV so they can be shown above matching FQDN records.
-                    try:
-                        with open(file_path, "r", encoding="utf-8-sig", newline="") as header_file:
-                            # Keep the first four physical rows: the first is used
-                            # as native column headings, while later header-type rows
-                            # are displayed above the matched FQDN data.
-                            self.fqdn_header_rows_by_file[file] = list(csv.reader(header_file))[:4]
-                    except Exception:
-                        self.fqdn_header_rows_by_file[file] = []
                     df = pd.read_csv(file_path, dtype=str, low_memory=False)
                     if len(df.columns) < 2:
                         continue
@@ -7344,7 +7278,6 @@ if __name__ == "__main__":
             error_root.destroy()
         except Exception:
             print(error_text)
-
 
 
 
