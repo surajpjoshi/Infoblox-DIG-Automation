@@ -2724,6 +2724,8 @@ class InfobloxDigApp:
         self.fqdn_visible_columns = []
         self.fqdn_visible_rows = []
         self.fqdn_table = None
+        # Additive display-only storage for the first three source-file header rows.
+        self.fqdn_header_rows_by_file = {}
 
 
 
@@ -3416,13 +3418,67 @@ class InfobloxDigApp:
         self.fqdn_table.heading("__dig__", text="ACTION")
         self.fqdn_table.column("__dig__", width=110, minwidth=110, anchor="center", stretch=False)
 
+        # Additive display-only styling: source header rows are visually distinct
+        # from matching FQDN records and are never DIG-action rows.
+        try:
+            # Use a high-contrast tag so header rows remain clearly distinct
+            # even when the surrounding Treeview uses a dark theme.
+            self.fqdn_table.tag_configure(
+                "fqdn_source_header",
+                background="#FDE68A",
+                foreground="#111827",
+                font=("Segoe UI", 9, "bold")
+            )
+        except Exception:
+            pass
 
-
-
+        displayed_header_files = set()
         for dataframe_index in self.fqdn_visible_rows:
             if dataframe_index >= len(self.fqdn_results_df.index):
                 continue
             row = self.fqdn_results_df.iloc[dataframe_index]
+            source_file = str(row.get("Source_File", ""))
+
+            # Show each matching CSV's first three source rows before its first result.
+            # These are display-only rows and cannot trigger the DIG action.
+            if source_file and source_file not in displayed_header_files:
+                displayed_header_files.add(source_file)
+                raw_header_rows = getattr(self, "fqdn_header_rows_by_file", {}).get(source_file, [])
+                # The native Treeview heading displays source header row 1
+                # (header-authzone, fqdn*, zone_format*, ...). Some source files
+                # repeat that same row as the first data row. Skip any repeated
+                # copy, then display header-forwardzone and header-delegatedzone
+                # as the two additional, styled header bands before matching data.
+                base_header = [str(value).strip() if value is not None else "" for value in columns]
+                additional_headers = []
+                for raw_header in raw_header_rows:
+                    normalized_header = [str(value).strip() if value is not None else "" for value in raw_header]
+                    if normalized_header == base_header:
+                        continue
+                    # Only keep the two remaining header-type rows requested.
+                    if any(value.startswith("header-") for value in normalized_header):
+                        additional_headers.append(raw_header)
+                    if len(additional_headers) >= 2:
+                        break
+
+                for header_index, raw_header in enumerate(additional_headers, start=2):
+                    header_values = [
+                        str(raw_header[col_index]) if col_index < len(raw_header) and raw_header[col_index] is not None else ""
+                        for col_index in [0, 1, 2, 3, 4, 6, 8, 9, 10, 27, 30, 37, 39, 40]
+                    ]
+                    # Match the result table's selected columns; keep Source_File visible
+                    # when it is among the displayed columns.
+                    if "Source_File" in columns:
+                        header_values.append(source_file)
+                    while len(header_values) < len(columns):
+                        header_values.append("")
+                    header_values = header_values[:len(columns)]
+                    self.fqdn_table.insert(
+                        "", "end", iid=f"header_{re.sub(r'[^A-Za-z0-9_]', '_', source_file)}_{header_index}",
+                        values=header_values + [f"HEADER {header_index}"],
+                        tags=("fqdn_source_header",)
+                    )
+
             values = ["" if pd.isna(row[column]) else str(row[column]) for column in columns]
             all_row_values = ["" if pd.isna(value) else str(value) for value in row.tolist()]
             ips = self.fqdn_extract_ips(all_row_values)
@@ -3445,7 +3501,7 @@ class InfobloxDigApp:
             return
         column_id = self.fqdn_table.identify_column(event.x)
         row_id = self.fqdn_table.identify_row(event.y)
-        if not row_id or column_id != f"#{len(self.fqdn_visible_columns) + 1}":
+        if not row_id or not row_id.startswith("row_") or column_id != f"#{len(self.fqdn_visible_columns) + 1}":
             return
         try:
             dataframe_index = int(row_id.replace("row_", ""))
@@ -3550,6 +3606,16 @@ class InfobloxDigApp:
             if file.endswith(".csv"):
                 file_path = os.path.join(folder_path, file)
                 try:
+                    # Additive display support: preserve the first three physical rows
+                    # from each CSV so they can be shown above matching FQDN records.
+                    try:
+                        with open(file_path, "r", encoding="utf-8-sig", newline="") as header_file:
+                            # Keep the first four physical rows: the first is used
+                            # as native column headings, while later header-type rows
+                            # are displayed above the matched FQDN data.
+                            self.fqdn_header_rows_by_file[file] = list(csv.reader(header_file))[:4]
+                    except Exception:
+                        self.fqdn_header_rows_by_file[file] = []
                     df = pd.read_csv(file_path, dtype=str, low_memory=False)
                     if len(df.columns) < 2:
                         continue
@@ -6083,8 +6149,8 @@ class InfobloxDigApp:
     def open_server_profiles(self):
         window = ctk.CTkToplevel(self.root)
         window.title("Server Profiles / Multi-Infoblox Test")
-        window.geometry("1000x680")
-        window.minsize(880, 580)
+        window.geometry("1000x720")
+        window.minsize(880, 620)
         window.transient(self.root)
         window.configure(fg_color=COLOR_BG)
 
@@ -6214,6 +6280,24 @@ class InfobloxDigApp:
 
 
 
+
+        # Additive: optional parallel DIG workers per selected server for Multi-Infoblox runs.
+        multi_fast_frame = ctk.CTkFrame(window, fg_color=COLOR_SURFACE, corner_radius=12,
+                                         border_width=1, border_color=COLOR_BORDER)
+        multi_fast_frame.pack(fill="x", padx=18, pady=(6, 2))
+        multi_fast_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            multi_fast_frame,
+            text="Enable Fast DIG Mode for Multi-Infoblox (parallel workers per server)",
+            variable=multi_fast_var,
+            font=font(10, "bold"), text_color=COLOR_TEXT,
+            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER
+        ).pack(side="left", padx=(14, 10), pady=10)
+        ctk.CTkLabel(multi_fast_frame, text="Workers per server (1–10):",
+                     font=font(10), text_color=COLOR_TEXT_MUTED).pack(side="left", padx=(8, 4))
+        multi_fast_workers_entry = self._entry(multi_fast_frame, width=64)
+        multi_fast_workers_entry.insert(0, "3")
+        multi_fast_workers_entry.pack(side="left", padx=(2, 14), pady=8)
 
         button_frame = ctk.CTkFrame(window, fg_color="transparent")
         button_frame.pack(fill="x", padx=18, pady=(6, 18))
@@ -6366,9 +6450,33 @@ class InfobloxDigApp:
             if not commands:
                 messagebox.showwarning("Multi-Infoblox Test", "No DIG commands found.")
                 return
+            multi_fast_enabled = bool(multi_fast_var.get())
+            multi_fast_workers = 1
+            if multi_fast_enabled:
+                try:
+                    multi_fast_workers = int(multi_fast_workers_entry.get().strip())
+                except (ValueError, AttributeError):
+                    messagebox.showwarning("Multi-Infoblox Fast DIG", "Workers per server must be a number between 1 and 10.")
+                    return
+                if multi_fast_workers < 1 or multi_fast_workers > 10:
+                    messagebox.showwarning("Multi-Infoblox Fast DIG", "Workers per server must be between 1 and 10.")
+                    return
+                total_sessions = len(selected_profiles) * multi_fast_workers
+                if total_sessions > 20:
+                    if not messagebox.askyesno(
+                        "High SSH Session Count",
+                        f"This run may create up to {total_sessions} concurrent SSH sessions "
+                        f"({len(selected_profiles)} servers × {multi_fast_workers} workers). Continue?",
+                        parent=window
+                    ):
+                        return
+
             self.open_live_output()
             window.destroy()
-            self.run_multi_server(selected_profiles, commands)
+            self.run_multi_server(
+                selected_profiles, commands,
+                fast_mode=multi_fast_enabled, workers_per_server=multi_fast_workers
+            )
 
 
 
@@ -6385,7 +6493,7 @@ class InfobloxDigApp:
 
 
 
-    def run_multi_server(self, profiles, commands):
+    def run_multi_server(self, profiles, commands, fast_mode=False, workers_per_server=1):
         STOP_DIG_EVENT.clear()
         self.stop_dig_button.configure(state="normal")
 
@@ -6405,6 +6513,11 @@ class InfobloxDigApp:
             [(profile.get("server", "") or profile.get("name", ""), command)
              for profile in profiles for command in commands],
             title="Multi-Infoblox Live DIG Monitor"
+        )
+        self.log(
+            f"[MULTI TEST] Mode: {'FAST' if fast_mode else 'STANDARD'}; "
+            f"servers: {len(profiles)}; workers per server: {workers_per_server if fast_mode else 1}; "
+            f"maximum concurrent SSH sessions: {len(profiles) * (workers_per_server if fast_mode else 1)}"
         )
 
 
@@ -6552,7 +6665,8 @@ class InfobloxDigApp:
             dashboard_header,
             text=(
                 f"Running {len(profiles)} servers simultaneously  •  "
-                f"Total DIG commands per server: {len(commands)}"
+                f"Total DIG commands per server: {len(commands)}  •  "
+                f"Fast workers/server: {workers_per_server if fast_mode else 1}"
             ),
             font=font(10),
             text_color=COLOR_TEXT_MUTED
@@ -6816,6 +6930,142 @@ class InfobloxDigApp:
 
 
 
+        def execute_multi_server_fast(server_index, profile, server, username, port,
+                                      authentication, password, key_file, key_passphrase):
+            """Additive Fast DIG executor: split one server's commands across independent SSH sessions."""
+            worker_total = min(max(1, int(workers_per_server)), len(commands))
+            chunks = []
+            for worker_index in range(worker_total):
+                start = worker_index * len(commands) // worker_total
+                end = (worker_index + 1) * len(commands) // worker_total
+                chunks.append((worker_index, commands[start:end]))
+
+            progress_lock = threading.Lock()
+            worker_done = {idx: 0 for idx, _ in chunks}
+            worker_retry_totals = {idx: 0 for idx, _ in chunks}
+            worker_retry_done = {idx: 0 for idx, _ in chunks}
+
+            def worker_progress(idx, phase, assigned):
+                def callback(done, total):
+                    with progress_lock:
+                        if phase == 1:
+                            worker_done[idx] = min(max(0, done), assigned)
+                            combined = sum(worker_done.values())
+                            overall = len(commands)
+                        else:
+                            worker_retry_done[idx] = min(max(0, done), assigned)
+                            combined = sum(worker_retry_done.values())
+                            overall = sum(worker_retry_totals.values())
+                    update_dashboard_progress(server_index, combined, overall,
+                                               "Step 1" if phase == 1 else "Retry")
+                    update_dashboard_status(
+                        server_index,
+                        f"Fast DIG {'Step 1' if phase == 1 else 'Retry'}: {combined}/{overall}",
+                        COLOR_ACCENT if phase == 1 else COLOR_WARNING
+                    )
+                return callback
+
+            def timeout_text(chunk):
+                return "".join(f"\n> {normalize_command(cmd)}\nconnection timed out\n" for cmd in chunk)
+
+            def run_chunk(worker_index, chunk):
+                label = f"[FAST W{worker_index + 1}]"
+                append_dashboard_output(server_index,
+                    f"{label} Starting; assigned {len(chunk)} commands.\n")
+                session = None
+                try:
+                    if worker_index:
+                        delay = min(worker_index * 2, 8)
+                        for _ in range(delay * 10):
+                            if STOP_DIG_EVENT.is_set():
+                                break
+                            time.sleep(0.1)
+                    step1_result = None
+                    for attempt in range(1, 4):
+                        if STOP_DIG_EVENT.is_set():
+                            break
+                        step1_result = execute_ssh(
+                            server=server, username=username, port=port,
+                            authentication=authentication, password=password,
+                            key_file=key_file, key_passphrase=key_passphrase,
+                            commands=chunk,
+                            log_callback=lambda message, raw=False: server_log_callback(
+                                server_index, f"{label} {message}" if not raw else message, raw=raw),
+                            keep_connection=True,
+                            progress_callback=worker_progress(worker_index, 1, len(chunk)),
+                            command_callback=self._monitor_command_event
+                        )
+                        if isinstance(step1_result, tuple) and len(step1_result) == 4:
+                            break
+                        if attempt < 3 and not STOP_DIG_EVENT.is_set():
+                            for _ in range(attempt * 50):
+                                if STOP_DIG_EVENT.is_set():
+                                    break
+                                time.sleep(0.1)
+                    if not isinstance(step1_result, tuple) or len(step1_result) != 4:
+                        for cmd in chunk:
+                            self._monitor_command_event("complete", server, cmd,
+                                "CONNECTION TIMED OUT", time.time(), time.time())
+                        return worker_index, timeout_text(chunk), [], "", True
+                    step1_output, client, channel, key_dir = step1_result
+                    session = (client, channel, key_dir)
+                    unsuccessful = extract_unsuccessful(step1_output) if not STOP_DIG_EVENT.is_set() else []
+                    with progress_lock:
+                        worker_retry_totals[worker_index] = len(unsuccessful)
+                    step3_output = ""
+                    if unsuccessful and not STOP_DIG_EVENT.is_set():
+                        step3_output = run_step3(
+                            server=server, username=username, port=port,
+                            authentication=authentication, password=password,
+                            key_file=key_file, key_passphrase=key_passphrase,
+                            unsuccessful_commands=unsuccessful,
+                            log_callback=lambda message, raw=False: server_log_callback(
+                                server_index, f"{label} {message}" if not raw else message, raw=raw),
+                            session=session,
+                            progress_callback=worker_progress(worker_index, 3, len(unsuccessful)),
+                            command_callback=self._monitor_command_event
+                        )
+                    return worker_index, step1_output, unsuccessful, step3_output, False
+                except Exception as exc:
+                    server_log_callback(server_index, f"{label} ERROR: {exc}")
+                    return worker_index, timeout_text(chunk), [], "", True
+                finally:
+                    if session:
+                        try:
+                            session[1].send("exit\n")
+                        except Exception:
+                            pass
+                        try:
+                            session[1].close()
+                        except Exception:
+                            pass
+                        try:
+                            session[0].close()
+                        except Exception:
+                            pass
+                        if session[2]:
+                            shutil.rmtree(session[2], ignore_errors=True)
+
+            results = {}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=worker_total) as pool:
+                future_map = {pool.submit(run_chunk, idx, chunk): (idx, chunk)
+                              for idx, chunk in chunks}
+                for future in concurrent.futures.as_completed(future_map):
+                    idx, chunk = future_map[future]
+                    try:
+                        results[idx] = future.result()
+                    except Exception as exc:
+                        server_log_callback(server_index, f"[FAST W{idx + 1}] Unhandled error: {exc}")
+                        results[idx] = (idx, timeout_text(chunk), [], "", True)
+            ordered = [results[idx] for idx, _ in chunks]
+            combined_step1 = "\n".join(item[1] for item in ordered if item[1])
+            combined_unsuccessful = [cmd for item in ordered for cmd in item[2]]
+            combined_step3 = "\n".join(item[3] for item in ordered if item[3])
+            failed = sum(1 for item in ordered if item[4])
+            append_dashboard_output(server_index,
+                f"[FAST] Workers completed: {worker_total}; failed worker sessions: {failed}.\n")
+            return combined_step1, combined_unsuccessful, combined_step3
+
         def server_worker(server_index, profile):
             nonlocal completed_servers
             server = profile.get("server", "")
@@ -6858,18 +7108,25 @@ class InfobloxDigApp:
 
 
 
-                step1 = execute_ssh(
-                    server=server, username=username, port=port,
-                    authentication=authentication, password=password,
-                    key_file=key_file, key_passphrase=key_passphrase,
-                    commands=commands,
-                    log_callback=lambda message, raw=False, idx=server_index: (
-                        server_log_callback(idx, message, raw=raw)
-                    ),
-                    keep_connection=True,
-                    progress_callback=step1_progress,
-                    command_callback=self._monitor_command_event
-                )
+                if fast_mode:
+                    step1_output, unsuccessful, step3_output = execute_multi_server_fast(
+                        server_index, profile, server, username, port,
+                        authentication, password, key_file, key_passphrase
+                    )
+                    step1 = (step1_output, None, None, None)
+                else:
+                    step1 = execute_ssh(
+                        server=server, username=username, port=port,
+                        authentication=authentication, password=password,
+                        key_file=key_file, key_passphrase=key_passphrase,
+                        commands=commands,
+                        log_callback=lambda message, raw=False, idx=server_index: (
+                            server_log_callback(idx, message, raw=raw)
+                        ),
+                        keep_connection=True,
+                        progress_callback=step1_progress,
+                        command_callback=self._monitor_command_event
+                    )
 
 
 
@@ -6894,13 +7151,10 @@ class InfobloxDigApp:
 
 
                 step1_output, client, channel, key_dir = step1
-                session = (client, channel, key_dir)
-
-
-
-
-                unsuccessful = extract_unsuccessful(step1_output)
-                step3_output = ""
+                if not fast_mode:
+                    session = (client, channel, key_dir)
+                    unsuccessful = extract_unsuccessful(step1_output)
+                    step3_output = ""
 
 
 
@@ -6922,7 +7176,7 @@ class InfobloxDigApp:
 
 
 
-                if unsuccessful:
+                if unsuccessful and not fast_mode:
                     retry_total = len(unsuccessful)
                     update_dashboard_status(
                         server_index,
