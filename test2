@@ -462,7 +462,7 @@
             line-height: 1.5;
         }
 
-        /* ---------- Overlays & Modals ---------- */
+        /* ---------- Modal ---------- */
         .overlay {
             position: fixed;
             inset: 0;
@@ -517,43 +517,6 @@
             margin-bottom: 6px;
             text-transform: uppercase;
             letter-spacing: 0.04em;
-        }
-
-        /* ---------- PIN Modal ---------- */
-        .pin-modal {
-            max-width: 400px !important;
-            text-align: center;
-        }
-
-        .pin-modal h3 {
-            margin-bottom: 20px;
-        }
-
-        .pin-input {
-            padding: 14px;
-            border-radius: var(--radius-sm);
-            border: 1px solid var(--border-light);
-            width: 100%;
-            background: transparent;
-            color: inherit;
-            font-size: 20px;
-            text-align: center;
-            letter-spacing: 8px;
-            font-family: 'SF Mono', monospace;
-            transition: var(--transition);
-            outline: none;
-        }
-
-        .pin-input:focus {
-            border-color: var(--accent1);
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
-        }
-
-        .pin-actions {
-            margin-top: 16px;
-            display: flex;
-            gap: 10px;
-            justify-content: center;
         }
 
         /* ---------- Responsive ---------- */
@@ -645,15 +608,12 @@
                 </div>
                 <div>
                     <h1>Credential & URL Manager</h1>
-                    <div class="subtitle">Local • PIN protected • CSV import/export</div>
+                    <div class="subtitle">Local • CSV import/export</div>
                 </div>
             </div>
             <div class="top-controls">
                 <button id="themeToggle" class="btn ghost" title="Toggle theme">
                     <i class="fas fa-sun"></i>
-                </button>
-                <button id="lockBtn" class="btn primary" title="Lock now" onclick="lockNow()">
-                    <i class="fas fa-lock"></i> Lock
                 </button>
             </div>
         </header>
@@ -735,24 +695,6 @@
         </div>
     </div>
 
-    <!-- PIN Overlay -->
-    <div id="pinOverlay" class="overlay" style="display:none;align-items:center;justify-content:center">
-        <div class="modal pin-modal">
-            <div style="width:56px;height:56px;border-radius:16px;background:var(--accent-grad);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:24px;color:white;box-shadow:0 4px 14px rgba(59,130,246,0.3)">
-                <i class="fas fa-lock"></i>
-            </div>
-            <h3 id="pinTitle">Enter PIN to unlock</h3>
-            <input id="pinInput" class="pin-input" type="password" placeholder="••••" maxlength="6">
-            <div class="pin-actions">
-                <button class="btn primary" onclick="unlockWithPin()">
-                    <i class="fas fa-unlock"></i> Unlock
-                </button>
-                <button class="btn ghost" onclick="setupPin()">Set PIN</button>
-            </div>
-            <div id="pinMsg" class="muted" style="margin-top:12px"></div>
-        </div>
-    </div>
-
     <!-- Add/Edit Modal -->
     <div id="modalOverlay" class="overlay" style="display:none">
         <div class="modal">
@@ -801,11 +743,9 @@
         let state = { 
             folders: [], 
             items: [], 
-            selectedFolder: 'inbox', 
-            unlocked: false 
+            selectedFolder: 'inbox'
         };
         const STORAGE_KEY = 'cred_manager_final_v1';
-        const PIN_KEY = 'cred_manager_pin_v1';
 
         // ========== Theme Management ==========
         const themeToggle = qs('#themeToggle');
@@ -840,67 +780,6 @@
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
             renderTables();
             renderFolders();
-        }
-
-        // ========== PIN Security ==========
-        async function hashPIN(pin) {
-            const enc = new TextEncoder();
-            const buf = await crypto.subtle.digest('SHA-256', enc.encode(pin));
-            return Array.from(new Uint8Array(buf))
-                .map(b => b.toString(16).padStart(2, '0'))
-                .join('');
-        }
-
-        async function setupPin() {
-            const pin = prompt('Set a numeric PIN (4-6 digits). Leave blank to cancel.');
-            if (!pin) return;
-            
-            if (!/^[0-9]{4,6}$/.test(pin)) {
-                alert('PIN must be 4-6 digits');
-                return;
-            }
-            
-            const h = await hashPIN(pin);
-            localStorage.setItem(PIN_KEY, h);
-            alert('PIN saved. Use it to unlock.');
-            showPinOverlay();
-        }
-
-        async function unlockWithPin() {
-            const pin = qs('#pinInput').value.trim();
-            const msg = qs('#pinMsg');
-            const stored = localStorage.getItem(PIN_KEY);
-            
-            if (!stored) {
-                msg.textContent = 'No PIN set — set PIN first.';
-                return;
-            }
-            
-            if (!pin) {
-                msg.textContent = 'Enter PIN';
-                return;
-            }
-            
-            const h = await hashPIN(pin);
-            if (h === stored) {
-                state.unlocked = true;
-                qs('#pinOverlay').style.display = 'none';
-                renderTables();
-                renderFolders();
-            } else {
-                msg.textContent = 'Incorrect PIN';
-            }
-        }
-
-        function lockNow() {
-            state.unlocked = false;
-            showPinOverlay();
-        }
-
-        function showPinOverlay() {
-            qs('#pinOverlay').style.display = 'flex';
-            qs('#pinInput').value = '';
-            qs('#pinMsg').textContent = '';
         }
 
         // ========== Folder Management ==========
@@ -1078,12 +957,6 @@
 
         // ========== Render Functions ==========
         function renderTables() {
-            if (!state.unlocked) {
-                qs('#credsContainer').innerHTML = '<div class="empty"><i class="fas fa-lock"></i>Locked — enter PIN to view</div>';
-                qs('#urlsContainer').innerHTML = '<div class="empty"><i class="fas fa-lock"></i>Locked — enter PIN to view</div>';
-                return;
-            }
-            
             const q = qs('#globalSearch').value.trim().toLowerCase();
             const folder = state.selectedFolder || 'inbox';
             
@@ -1324,26 +1197,13 @@
         window.deleteFolder = deleteFolder;
         window.exportCSV = exportCSV;
         window.importCSV = importCSV;
-        window.unlockWithPin = unlockWithPin;
-        window.setupPin = setupPin;
-        window.lockNow = lockNow;
         window.renderTables = renderTables;
         window.renderFolders = renderFolders;
 
         // ========== Initialization ==========
         loadState();
-
-        // PIN initialization
-        (function() {
-            if (localStorage.getItem(PIN_KEY)) {
-                showPinOverlay();
-                state.unlocked = false;
-            } else {
-                state.unlocked = true;
-            }
-            renderTables();
-            renderFolders();
-        })();
+        renderTables();
+        renderFolders();
     </script>
 </body>
 </html>
