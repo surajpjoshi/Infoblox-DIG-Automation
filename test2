@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Credential & URL Manager — Final (Professional Dark)</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg: #071021;
+            --card: #0f1724;
+            --muted: #9aa4b2;
+            --accent1: #2176FF;
+            --accent2: #00D4FF;
+            --accent-grad: linear-gradient(90deg, var(--accent1), var(--accent2));
+            --success: #10b981;
+            --danger: #ef4444;
+            --radius: 12px;
+            color-scheme: dark;
+        }
+
+        [data-theme="light"] {
+            --bg: #f4f7fb;
+            --card: #ffffff;
+            --muted: #6b7280;
+            color-scheme: light;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Inter, system-ui, Segoe UI, Roboto, Arial;
+            background: var(--bg);
+            color: #e6eef8;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .app {
+            max-width: 1200px;
+            margin: 28px auto;
+            padding: 18px;
+        }
+
+        header.app-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 18px;
+            border-radius: 14px;
+            background: linear-gradient(90deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+            border: 1px solid rgba(255,255,255,0.02);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand .logo {
+            width: 46px;
+            height: 46px;
+            border-radius: 10px;
+            background: var(--accent1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            color: white;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.6);
+        }
+
+        .brand h1 {
+            font-size: 18px;
+            margin: 0;
+        }
+
+        .top-controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 8px 12px;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            background: transparent;
+            color: inherit;
+            font-weight: 600;
+        }
+
+        .btn.primary {
+            background: var(--accent-grad);
+            color: white;
+        }
+
+        .btn.ghost {
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.03);
+        }
+
+        .btn.danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .main {
+            display: grid;
+            grid-template-columns: 260px 1fr;
+            gap: 18px;
+            margin-top: 18px;
+        }
+
+        .card {
+            background: var(--card);
+            padding: 14px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.02);
+        }
+
+        .sidebar .title {
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .folder-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .folder {
+            padding: 8px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .folder:hover {
+            background: rgba(255,255,255,0.02);
+        }
+
+        .folder.active {
+            background: linear-gradient(90deg, rgba(33,118,255,0.14), rgba(0,212,255,0.06));
+            border: 1px solid rgba(33,118,255,0.12);
+        }
+
+        .small {
+            padding: 6px 8px;
+            border-radius: 8px;
+        }
+
+        .input-inline {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        input[type=text],
+        input[type=password],
+        select {
+            width: 100%;
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.04);
+            background: transparent;
+            color: inherit;
+        }
+
+        .toolbar {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .search {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            border-radius: 10px;
+            padding: 6px 8px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.02);
+        }
+
+        .search input {
+            border: none;
+            background: transparent;
+            outline: none;
+            color: inherit;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.02);
+            font-size: 14px;
+        }
+
+        th {
+            color: var(--muted);
+            font-weight: 600;
+        }
+
+        tr:hover {
+            background: rgba(255,255,255,0.01);
+        }
+
+        .muted {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .empty {
+            padding: 30px;
+            text-align: center;
+            color: var(--muted);
+        }
+
+        /* Modal / Overlay */
+        .overlay {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(180deg, rgba(2,6,23,0.6), rgba(2,6,23,0.8));
+            z-index: 9999;
+        }
+
+        .modal {
+            background: var(--card);
+            padding: 18px;
+            border-radius: 12px;
+            width: 720px;
+            max-width: 95%;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+            border: 1px solid rgba(255,255,255,0.02);
+        }
+
+        .modal h3 {
+            margin: 0 0 8px 0;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .form-grid .full {
+            grid-column: 1/3;
+        }
+
+        /* Pin Overlay */
+        .pin-input {
+            padding: 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.04);
+            width: 100%;
+            background: transparent;
+            color: inherit;
+        }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .main {
+                grid-template-columns: 1fr;
+            }
+            
+            .sidebar {
+                order: 2;
+            }
+            
+            .modal {
+                width: 95vw;
+            }
+        }
+    </style>
+</head>
+<body data-theme="dark">
+    <div class="app">
+        <header class="app-header">
+            <div class="brand">
+                <div class="logo">
+                    <i class="fas fa-key"></i>
+                </div>
+                <div>
+                    <h1>Credential & URL Manager</h1>
+                    <div class="muted" style="font-size:12px">
+                        Local • PIN protected • CSV import/export
+                    </div>
+                </div>
+            </div>
+            <div class="top-controls">
+                <div style="display:flex;gap:8px;align-items:center" class="muted">
+                    Theme
+                </div>
+                <button id="themeToggle" class="btn ghost" title="Toggle theme">
+                    <i class="fas fa-sun"></i>
+                </button>
+                <button id="lockBtn" class="btn primary" title="Lock now" onclick="lockNow()">
+                    <i class="fas fa-lock"></i> Lock
+                </button>
+            </div>
+        </header>
+
+        <div class="main">
+            <!-- Sidebar -->
+            <aside class="sidebar card">
+                <div class="title">Folders</div>
+                <div class="folder-list" id="folderList"></div>
+                
+                <div style="margin-top:12px;display:flex;gap:8px">
+                    <button class="small btn ghost" onclick="showFolderInput()">
+                        + New Folder
+                    </button>
+                    <button class="small btn ghost" onclick="renameFolder()">
+                        Rename
+                    </button>
+                    <button class="small btn" style="background:var(--danger);color:white" onclick="deleteFolder()">
+                        Delete
+                    </button>
+                </div>
+                
+                <div id="folderForm" class="input-inline" style="display:none">
+                    <input id="newFolderName" placeholder="Folder name">
+                    <button class="small btn primary" onclick="createFolder()">
+                        Create
+                    </button>
+                </div>
+                
+                <div style="margin-top:14px" class="muted">
+                    Tip: create folders and assign when adding items.
+                </div>
+            </aside>
+
+            <!-- Content -->
+            <section class="content">
+                <div class="card">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                        <h2 style="margin:0">Quick Actions</h2>
+                        <div class="toolbar">
+                            <div class="search">
+                                <i class="fas fa-search"></i>
+                                <input id="globalSearch" placeholder="Search labels, users, projects or URLs..." oninput="renderTables()">
+                            </div>
+                            <button class="btn ghost" onclick="openAddModal('cred')">
+                                <i class="fas fa-plus"></i> Credential
+                            </button>
+                            <button class="btn ghost" onclick="openAddModal('url')">
+                                <i class="fas fa-plus-circle"></i> URL
+                            </button>
+                            <button class="btn" onclick="exportCSV()">
+                                <i class="fas fa-file-export"></i> Export
+                            </button>
+                            <label class="btn" style="cursor:pointer">
+                                <i class="fas fa-file-import"></i> Import 
+                                <input type="file" accept=".csv" onchange="importCSV(event)" style="display:none">
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" id="credentialsCard">
+                    <h2 style="margin:0 0 8px 0">Credentials</h2>
+                    <div id="credsContainer"></div>
+                </div>
+
+                <div class="card" id="urlsCard">
+                    <h2 style="margin:0 0 8px 0">URLs</h2>
+                    <div id="urlsContainer"></div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- PIN Overlay -->
+    <div id="pinOverlay" class="overlay" style="display:none;align-items:center;justify-content:center">
+        <div class="modal" style="max-width:420px;text-align:center">
+            <h3 id="pinTitle">Enter PIN to unlock</h3>
+            <input id="pinInput" class="pin-input" type="password" placeholder="4-6 digit PIN">
+            <div style="margin-top:12px;display:flex;gap:10px;justify-content:center">
+                <button class="btn primary" onclick="unlockWithPin()">Unlock</button>
+                <button class="btn ghost" onclick="setupPin()">Set PIN</button>
+            </div>
+            <div id="pinMsg" class="muted" style="margin-top:10px"></div>
+        </div>
+    </div>
+
+    <!-- Add/Edit Modal -->
+    <div id="modalOverlay" class="overlay" style="display:none">
+        <div class="modal">
+            <h3 id="modalTitle">Add Item</h3>
+            <div class="form-grid">
+                <div>
+                    <label>Type</label>
+                    <select id="modalType" onchange="onTypeChange()">
+                        <option value="cred">Credential</option>
+                        <option value="url">URL</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Folder</label>
+                    <select id="modalFolder"></select>
+                </div>
+                <div id="labelField">
+                    <label>Label</label>
+                    <input id="modalLabel" type="text">
+                </div>
+                <div id="userField">
+                    <label>Username / Project</label>
+                    <input id="modalUser" type="text">
+                </div>
+                <div id="passField">
+                    <label>Password / URL</label>
+                    <input id="modalPass" type="text">
+                </div>
+                <div class="full">
+                    <label>Notes</label>
+                    <input id="modalNotes" type="text">
+                </div>
+            </div>
+            <div style="margin-top:12px;display:flex;justify-content:flex-end;gap:10px">
+                <button class="btn ghost" onclick="closeModal()">Cancel</button>
+                <button id="modalSaveBtn" class="btn primary" onclick="saveModal()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ========== Utilities & State ==========
+        const qs = s => document.querySelector(s);
+        let state = { 
+            folders: [], 
+            items: [], 
+            selectedFolder: 'inbox', 
+            unlocked: false 
+        };
+        const STORAGE_KEY = 'cred_manager_final_v1';
+        const PIN_KEY = 'cred_manager_pin_v1';
+
+        // ========== Theme Management ==========
+        const themeToggle = qs('#themeToggle');
+
+        function applyTheme(t) {
+            document.documentElement.setAttribute('data-theme', t);
+            localStorage.setItem('cm_theme', t);
+            themeToggle.innerHTML = t === 'dark' ? '<i class="fas fa-moon"></i>' : '<i class="fas fa-sun"></i>';
+        }
+
+        themeToggle.addEventListener('click', () => {
+            const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+            applyTheme(cur === 'dark' ? 'light' : 'dark');
+        });
+
+        // Initialize theme
+        (function() {
+            applyTheme(localStorage.getItem('cm_theme') || 'dark');
+        })();
+
+        // ========== Storage Management ==========
+        function loadState() {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) state = JSON.parse(raw);
+            if (!state.folders || state.folders.length === 0) {
+                state.folders = [{ id: 'inbox', name: 'Inbox' }];
+            }
+            if (!state.items) state.items = [];
+        }
+
+        function saveState() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+            renderTables();
+            renderFolders();
+        }
+
+        // ========== PIN Security ==========
+        async function hashPIN(pin) {
+            const enc = new TextEncoder();
+            const buf = await crypto.subtle.digest('SHA-256', enc.encode(pin));
+            return Array.from(new Uint8Array(buf))
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join('');
+        }
+
+        async function setupPin() {
+            const pin = prompt('Set a numeric PIN (4-6 digits). Leave blank to cancel.');
+            if (!pin) return;
+            
+            if (!/^[0-9]{4,6}$/.test(pin)) {
+                alert('PIN must be 4-6 digits');
+                return;
+            }
+            
+            const h = await hashPIN(pin);
+            localStorage.setItem(PIN_KEY, h);
+            alert('PIN saved. Use it to unlock.');
+            showPinOverlay();
+        }
+
+        async function unlockWithPin() {
+            const pin = qs('#pinInput').value.trim();
+            const msg = qs('#pinMsg');
+            const stored = localStorage.getItem(PIN_KEY);
+            
+            if (!stored) {
+                msg.textContent = 'No PIN set — set PIN first.';
+                return;
+            }
+            
+            if (!pin) {
+                msg.textContent = 'Enter PIN';
+                return;
+            }
+            
+            const h = await hashPIN(pin);
+            if (h === stored) {
+                state.unlocked = true;
+                qs('#pinOverlay').style.display = 'none';
+                renderTables();
+                renderFolders();
+            } else {
+                msg.textContent = 'Incorrect PIN';
+            }
+        }
+
+        function lockNow() {
+            state.unlocked = false;
+            showPinOverlay();
+        }
+
+        function showPinOverlay() {
+            qs('#pinOverlay').style.display = 'flex';
+            qs('#pinInput').value = '';
+            qs('#pinMsg').textContent = '';
+        }
+
+        // ========== Folder Management ==========
+        function renderFolders() {
+            const el = qs('#folderList');
+            el.innerHTML = '';
+            
+            state.folders.forEach(f => {
+                const div = document.createElement('div');
+                div.className = 'folder';
+                if (f.id === state.selectedFolder) div.classList.add('active');
+                
+                div.innerHTML = `
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <strong>${f.name}</strong>
+                    </div>
+                `;
+                
+                div.onclick = () => {
+                    state.selectedFolder = f.id;
+                    renderTables();
+                };
+                
+                el.appendChild(div);
+            });
+        }
+
+        function showFolderInput() {
+            qs('#folderForm').style.display = 'flex';
+            qs('#newFolderName').focus();
+        }
+
+        function createFolder() {
+            const name = qs('#newFolderName').value.trim();
+            if (!name) return;
+            
+            const id = 'f_' + Date.now();
+            state.folders.push({ id, name });
+            qs('#newFolderName').value = '';
+            qs('#folderForm').style.display = 'none';
+            saveState();
+        }
+
+        function renameFolder() {
+            const f = state.folders.find(x => x.id === state.selectedFolder);
+            if (!f) return alert('Select a folder first by clicking it.');
+            
+            const nm = prompt('Rename folder', f.name);
+            if (!nm) return;
+            
+            f.name = nm;
+            saveState();
+        }
+
+        function deleteFolder() {
+            if (state.selectedFolder === 'inbox') return alert('Cannot delete Inbox');
+            if (!confirm('Delete folder and its items?')) return;
+            
+            state.items = state.items.filter(i => i.folder !== state.selectedFolder);
+            state.folders = state.folders.filter(f => f.id !== state.selectedFolder);
+            state.selectedFolder = 'inbox';
+            saveState();
+        }
+
+        // ========== Modal Management ==========
+        function openAddModal(type, item) {
+            qs('#modalOverlay').style.display = 'flex';
+            qs('#modalType').value = type;
+            onTypeChange();
+            
+            const sel = qs('#modalFolder');
+            sel.innerHTML = '';
+            state.folders.forEach(f => {
+                const o = document.createElement('option');
+                o.value = f.id;
+                o.text = f.name;
+                sel.appendChild(o);
+            });
+            
+            if (item) {
+                qs('#modalTitle').innerText = 'Edit Item';
+                qs('#modalLabel').value = item.label || '';
+                qs('#modalUser').value = item.user || item.project || '';
+                qs('#modalPass').value = item.pass || item.url || '';
+                qs('#modalNotes').value = item.notes || '';
+                qs('#modalFolder').value = item.folder || state.selectedFolder;
+                qs('#modalSaveBtn').dataset.id = item.id;
+            } else {
+                qs('#modalTitle').innerText = 'Add Item';
+                qs('#modalLabel').value = '';
+                qs('#modalUser').value = '';
+                qs('#modalPass').value = '';
+                qs('#modalNotes').value = '';
+                qs('#modalFolder').value = state.selectedFolder || 'inbox';
+                delete qs('#modalSaveBtn').dataset.id;
+            }
+        }
+
+        function closeModal() {
+            qs('#modalOverlay').style.display = 'none';
+        }
+
+        function onTypeChange() {
+            const t = qs('#modalType').value;
+            qs('#userField label').innerText = t === 'cred' ? 'Username' : 'Project';
+            qs('#passField label').innerText = t === 'cred' ? 'Password' : 'URL';
+        }
+
+        function saveModal() {
+            const id = qs('#modalSaveBtn').dataset.id;
+            const type = qs('#modalType').value;
+            const label = qs('#modalLabel').value.trim();
+            const user = qs('#modalUser').value.trim();
+            const pass = qs('#modalPass').value.trim();
+            const notes = qs('#modalNotes').value.trim();
+            const folder = qs('#modalFolder').value;
+            
+            if (!label) return alert('Label required');
+            
+            if (id) {
+                const it = state.items.find(x => x.id === id);
+                it.label = label;
+                if (type === 'cred') {
+                    it.user = user;
+                    it.pass = pass;
+                } else {
+                    it.project = user;
+                    it.url = pass;
+                }
+                it.notes = notes;
+                it.folder = folder;
+            } else {
+                state.items.push({
+                    id: 'i_' + Date.now(),
+                    type,
+                    label,
+                    user: type === 'cred' ? user : undefined,
+                    pass: type === 'cred' ? pass : undefined,
+                    project: type === 'url' ? user : undefined,
+                    url: type === 'url' ? pass : undefined,
+                    notes,
+                    folder
+                });
+            }
+            
+            closeModal();
+            saveState();
+        }
+
+        function editItem(id) {
+            const it = state.items.find(x => x.id === id);
+            if (it) openAddModal(it.type, it);
+        }
+
+        function deleteItem(id) {
+            if (!confirm('Delete item?')) return;
+            state.items = state.items.filter(i => i.id !== id);
+            saveState();
+        }
+
+        function copyToClipboard(id, field) {
+            const it = state.items.find(x => x.id === id);
+            if (!it) return;
+            
+            let v = '';
+            if (field === 'user') v = it.user || it.project;
+            if (field === 'pass') v = it.pass;
+            if (field === 'url') v = it.url;
+            
+            navigator.clipboard.writeText(v);
+            // No alert - silent copying
+        }
+
+        // ========== Render Functions ==========
+        function renderTables() {
+            if (!state.unlocked) {
+                qs('#credsContainer').innerHTML = '<div class="empty">Locked — enter PIN to view</div>';
+                qs('#urlsContainer').innerHTML = '';
+                return;
+            }
+            
+            const q = qs('#globalSearch').value.trim().toLowerCase();
+            const folder = state.selectedFolder || 'inbox';
+            
+            const creds = state.items.filter(i => 
+                i.type === 'cred' && 
+                i.folder === folder && 
+                JSON.stringify(i).toLowerCase().includes(q)
+            );
+            
+            const urls = state.items.filter(i => 
+                i.type === 'url' && 
+                i.folder === folder && 
+                JSON.stringify(i).toLowerCase().includes(q)
+            );
+            
+            renderCredentialsTable(creds);
+            renderUrlsTable(urls);
+        }
+
+        function renderCredentialsTable(creds) {
+            const credBox = qs('#credsContainer');
+            credBox.innerHTML = '';
+            
+            if (creds.length === 0) {
+                credBox.innerHTML = '<div class="empty">No credentials</div>';
+                return;
+            }
+            
+            const t = document.createElement('table');
+            t.innerHTML = `
+                <thead>
+                    <tr>
+                        <th>Label</th>
+                        <th>User</th>
+                        <th>Pass</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+            `;
+            
+            const bd = document.createElement('tbody');
+            creds.forEach(it => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${escapeHtml(it.label)}</td>
+                    <td>${escapeHtml(it.user || '')}</td>
+                    <td style="font-family:monospace">${'*'.repeat(Math.max(4, String(it.pass || '').length))}</td>
+                    <td class="actions">
+                        <button class="btn ghost" onclick="editItem('${it.id}')">Edit</button>
+                        <button class="btn" onclick="copyToClipboard('${it.id}','user')">Copy User</button>
+                        <button class="btn" onclick="copyToClipboard('${it.id}','pass')">Copy Pass</button>
+                        <button class="btn danger" onclick="deleteItem('${it.id}')">Delete</button>
+                    </td>
+                `;
+                bd.appendChild(tr);
+            });
+            
+            t.appendChild(bd);
+            credBox.appendChild(t);
+        }
+
+        function renderUrlsTable(urls) {
+            const urlBox = qs('#urlsContainer');
+            urlBox.innerHTML = '';
+            
+            if (urls.length === 0) {
+                urlBox.innerHTML = '<div class="empty">No URLs</div>';
+                return;
+            }
+            
+            const t = document.createElement('table');
+            t.innerHTML = `
+                <thead>
+                    <tr>
+                        <th>Label</th>
+                        <th>Project</th>
+                        <th>URL</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+            `;
+            
+            const bd = document.createElement('tbody');
+            urls.forEach(it => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${escapeHtml(it.label)}</td>
+                    <td>${escapeHtml(it.project || '')}</td>
+                    <td><a href="${escapeAttr(it.url || '')}" target="_blank" rel="noreferrer">Open</a></td>
+                    <td class="actions">
+                        <button class="btn ghost" onclick="editItem('${it.id}')">Edit</button>
+                        <button class="btn" onclick="copyToClipboard('${it.id}','url')">Copy URL</button>
+                        <button class="btn danger" onclick="deleteItem('${it.id}')">Delete</button>
+                    </td>
+                `;
+                bd.appendChild(tr);
+            });
+            
+            t.appendChild(bd);
+            urlBox.appendChild(t);
+        }
+
+        function escapeHtml(s) {
+            if (!s) return '';
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
+        function escapeAttr(s) {
+            if (!s) return '';
+            return String(s).replace(/"/g, '&quot;');
+        }
+
+        // ========== CSV Import/Export ==========
+        function csvEscape(v) {
+            if (v == null) v = '';
+            return '"' + String(v).replace(/"/g, '""') + '"';
+        }
+
+        function exportCSV() {
+            const rows = state.items.map(it => {
+                return [
+                    it.type, 
+                    it.label, 
+                    it.user || '', 
+                    it.pass || '', 
+                    it.folder || '', 
+                    it.url || '', 
+                    it.project || ''
+                ].map(csvEscape).join(',');
+            });
+            
+            const header = "type,label,user,pass,folder,url,project\n";
+            const csv = header + rows.join("\n");
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'cm_backup.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function parseCSVLine(line) {
+            const out = [];
+            let cur = '';
+            let inQ = false;
+            
+            for (let i = 0; i < line.length; i++) {
+                const ch = line[i];
+                if (ch === '"') {
+                    if (inQ && line[i + 1] === '"') {
+                        cur += '"';
+                        i++;
+                    } else {
+                        inQ = !inQ;
+                    }
+                } else if (ch === ',' && !inQ) {
+                    out.push(cur);
+                    cur = '';
+                } else {
+                    cur += ch;
+                }
+            }
+            out.push(cur);
+            return out;
+        }
+
+        function importCSV(e) {
+            const file = e.target.files && e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(ev) {
+                const lines = ev.target.result.split(/\r?\n/).filter(Boolean);
+                const header = parseCSVLine(lines.shift()).map(h => h.replace(/"/g, ''));
+                const rows = lines.map(line => parseCSVLine(line).map(c => c.replace(/"/g, '')));
+                
+                const items = rows.map(r => {
+                    const obj = {};
+                    header.forEach((h, i) => obj[h] = r[i] || '');
+                    return {
+                        id: 'i_' + Date.now() + Math.random(),
+                        type: obj.type,
+                        label: obj.label,
+                        user: obj.user || '',
+                        pass: obj.pass || '',
+                        project: obj.project || '',
+                        url: obj.url || '',
+                        folder: obj.folder || 'inbox'
+                    };
+                });
+                
+                state.items = items;
+                
+                // Add missing folders
+                const folderIds = new Set(state.folders.map(f => f.id));
+                items.forEach(it => {
+                    if (it.folder && !folderIds.has(it.folder)) {
+                        state.folders.push({ id: it.folder, name: it.folder });
+                        folderIds.add(it.folder);
+                    }
+                });
+                
+                saveState();
+                alert('Imported successfully');
+            };
+            reader.readAsText(file);
+        }
+
+        // ========== Global Function Exports ==========
+        window.openAddModal = openAddModal;
+        window.closeModal = closeModal;
+        window.onTypeChange = onTypeChange;
+        window.saveModal = saveModal;
+        window.editItem = editItem;
+        window.deleteItem = deleteItem;
+        window.copyToClipboard = copyToClipboard;
+        window.showFolderInput = showFolderInput;
+        window.createFolder = createFolder;
+        window.renameFolder = renameFolder;
+        window.deleteFolder = deleteFolder;
+        window.exportCSV = exportCSV;
+        window.importCSV = importCSV;
+        window.unlockWithPin = unlockWithPin;
+        window.setupPin = setupPin;
+        window.lockNow = lockNow;
+        window.renderTables = renderTables;
+        window.renderFolders = renderFolders;
+
+        // ========== Initialization ==========
+        loadState();
+
+        // PIN initialization
+        (function() {
+            if (localStorage.getItem(PIN_KEY)) {
+                showPinOverlay();
+                state.unlocked = false;
+            } else {
+                state.unlocked = true;
+            }
+            renderTables();
+            renderFolders();
+        })();
+    </script>
+</body>
+</html>
