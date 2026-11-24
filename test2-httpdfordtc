@@ -1,0 +1,113 @@
+
+#!/bin/bash
+
+echo "======================================"
+echo "  INFOBLOX DTC - APACHE WEB SERVER"
+echo "======================================"
+
+# 1. Install Apache
+echo "[1/7] Installing Apache HTTPD..."
+sudo dnf install httpd -y || exit 1
+
+# 2. Create website directory
+echo "[2/7] Creating website..."
+
+sudo mkdir -p /var/www/html
+
+# 3. Create Infoblox DTC testing page
+sudo tee /var/www/html/index.html > /dev/null <<'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Infoblox DTC Testing</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #eef2f7;
+            text-align: center;
+            padding: 60px;
+        }
+
+        .container {
+            background: white;
+            padding: 35px;
+            border-radius: 12px;
+            max-width: 650px;
+            margin: auto;
+            box-shadow: 0 3px 15px #ccc;
+        }
+
+        h1 {
+            color: #1769aa;
+        }
+
+        .server {
+            color: green;
+            font-size: 24px;
+        }
+    </style>
+</head>
+
+<body>
+<div class="container">
+
+    <h1>Infoblox DTC Lab</h1>
+    <h2>DNS Traffic Control Testing</h2>
+
+    <p class="server">Backend Server: WEB-01</p>
+
+    <p>Location: AWS ap-southeast-2</p>
+    <p>Public IP: 15.135.215.129</p>
+    <p>Status: ONLINE</p>
+
+    <p id="time"></p>
+
+    <script>
+        document.getElementById("time").innerHTML =
+            "Browser Time: " + new Date().toLocaleString();
+    </script>
+
+</div>
+</body>
+</html>
+EOF
+
+# 4. Set permissions
+echo "[3/7] Setting permissions..."
+
+sudo chown root:root /var/www/html/index.html
+sudo chmod 644 /var/www/html/index.html
+
+# 5. Enable and start Apache
+echo "[4/7] Starting Apache..."
+
+sudo systemctl enable httpd || exit 1
+sudo systemctl restart httpd || exit 1
+
+# 6. Validate Apache configuration
+echo "[5/7] Validating Apache configuration..."
+
+sudo apachectl configtest || exit 1
+
+# 7. Verify Apache and website
+echo "[6/7] Checking Apache service..."
+
+sudo systemctl is-active httpd
+
+echo "[7/7] Testing website..."
+
+curl -I http://localhost
+
+echo ""
+echo "======================================"
+echo " INSTALLATION COMPLETED"
+echo "======================================"
+
+echo "Apache Status:"
+sudo systemctl status httpd --no-pager
+
+echo ""
+echo "Website URL:"
+echo "http://15.135.215.129"
+
+echo "======================================"
